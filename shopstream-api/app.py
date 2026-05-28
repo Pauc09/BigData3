@@ -19,15 +19,14 @@ from datetime import datetime
 
 from flask import Flask, jsonify, request
 from sqlalchemy import create_engine, text
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
-@app.route("/", methods=["GET"])
-def health():
-    return jsonify({"status": "ok", "service": "ShopStream API"})
 
 # ──────────────────────────────────────────────
 # CONFIGURACIÓN DE BASE DE DATOS
-# 
+# ──────────────────────────────────────────────
+
 DB_HOST = os.environ.get("DB_HOST", "localhost")
 DB_NAME = os.environ.get("DB_NAME", "shopstream")
 DB_USER = os.environ.get("DB_USER", "shopstream")
@@ -36,11 +35,9 @@ DB_PORT = os.environ.get("DB_PORT", "5432")
 USE_SQLITE = os.environ.get("USE_SQLITE", "true").lower() == "true"
 
 if USE_SQLITE:
-    # Desarrollo local con SQLite
     engine = create_engine("sqlite:///shopstream_dev.db", echo=False)
     print("[INFO] Usando SQLite local para desarrollo")
 else:
-    # Producción con RDS Postgres
     conn_str = f"postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     engine = create_engine(conn_str, echo=False)
     print(f"[INFO] Conectado a RDS: {DB_HOST}")
@@ -51,9 +48,7 @@ else:
 # ──────────────────────────────────────────────
 
 def init_dev_db():
-    """Crea tablas de ejemplo en SQLite para poder probar la API sin RDS."""
     with engine.connect() as conn:
-        # Tabla: métricas de páginas
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS page_metrics (
                 date        TEXT,
@@ -65,8 +60,6 @@ def init_dev_db():
                 PRIMARY KEY (date, page_url)
             )
         """))
-
-        # Tabla: resumen de sesiones
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS session_summary (
                 date            TEXT,
@@ -79,8 +72,6 @@ def init_dev_db():
                 PRIMARY KEY (date, country, device_type)
             )
         """))
-
-        # Tabla: anomalías
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS anomalies (
                 date            TEXT,
@@ -93,8 +84,6 @@ def init_dev_db():
                 PRIMARY KEY (date, session_id, anomaly_type)
             )
         """))
-
-        # Datos de ejemplo para poder probar
         conn.execute(text("""
             INSERT OR IGNORE INTO page_metrics VALUES
             ('2026-05-20', '/home', 'home', 45.2, 0.32, 1200),
@@ -108,7 +97,6 @@ def init_dev_db():
             ('2026-05-20', '/product/PROD-0003', 'product', 145.0, 0.12, 390),
             ('2026-05-20', '/category/sports', 'category', 72.1, 0.25, 310)
         """))
-
         conn.execute(text("""
             INSERT OR IGNORE INTO session_summary VALUES
             ('2026-05-20', 'CO', 'mobile', 3200, 4.5, 9800, 2100),
@@ -122,7 +110,6 @@ def init_dev_db():
             ('2026-05-20', 'CO', 'tablet', 450, 5.5, 1350, 380),
             ('2026-05-20', 'ES', 'desktop', 1100, 7.8, 4400, 900)
         """))
-
         conn.execute(text("""
             INSERT OR IGNORE INTO anomalies VALUES
             ('2026-05-20', 'SES-abc001', 'USR-00123', 'high_time_on_page', 4.2, 8200.0, 'Tiempo en página extremadamente alto'),
@@ -131,9 +118,8 @@ def init_dev_db():
             ('2026-05-20', 'SES-abc004', 'USR-01234', 'unusual_navigation', 3.2, 89.0, 'Patrón de navegación inusual'),
             ('2026-05-20', 'SES-abc005', 'USR-01567', 'rapid_clicks', 4.7, 210.0, 'Actividad de clic automatizada detectada')
         """))
-
         conn.commit()
-    print("[INFO] Base de datos de desarrollo inicializada con datos de ejemplo")
+    print("[INFO] Base de datos de desarrollo inicializada")
 
 
 # ──────────────────────────────────────────────
@@ -141,7 +127,6 @@ def init_dev_db():
 # ──────────────────────────────────────────────
 
 def validate_date(date_str: str) -> bool:
-    """Valida que el string tenga formato YYYY-MM-DD."""
     try:
         datetime.strptime(date_str, "%Y-%m-%d")
         return True
@@ -155,24 +140,14 @@ def error_response(message: str, code: int = 400):
 
 # ──────────────────────────────────────────────
 # ENDPOINT 1 — Top páginas
-# GET /pages/top?metric={bounce_rate|time_on_page}&date={date}&limit={n}
 # ──────────────────────────────────────────────
 
 @app.route("/pages/top", methods=["GET"])
 def pages_top():
-    """
-    Retorna las páginas con mayor tasa de rebote o tiempo de permanencia.
-
-    Params:
-      metric : bounce_rate | time_on_page  (requerido)
-      date   : YYYY-MM-DD                  (requerido)
-      limit  : int 1-100                   (opcional, default 10)
-    """
     metric = request.args.get("metric")
     date   = request.args.get("date")
     limit  = request.args.get("limit", 10)
 
-    # Validaciones
     if not metric:
         return error_response("Parámetro 'metric' requerido: bounce_rate | time_on_page")
     if metric not in ("bounce_rate", "time_on_page"):
@@ -189,16 +164,10 @@ def pages_top():
     except (ValueError, TypeError):
         return error_response("'limit' debe ser un entero entre 1 y 100")
 
-    # Columna a ordenar según métrica
     order_col = "bounce_rate" if metric == "bounce_rate" else "avg_time_on_page"
 
     query = text(f"""
-        SELECT
-            page_url,
-            page_type,
-            avg_time_on_page,
-            bounce_rate,
-            total_sessions
+        SELECT page_url, page_type, avg_time_on_page, bounce_rate, total_sessions
         FROM page_metrics
         WHERE date = :date
         ORDER BY {order_col} DESC
@@ -209,12 +178,7 @@ def pages_top():
         rows = conn.execute(query, {"date": date, "limit": limit}).fetchall()
 
     if not rows:
-        return jsonify({
-            "date": date,
-            "metric": metric,
-            "results": [],
-            "message": f"No hay datos para {date}"
-        })
+        return jsonify({"date": date, "metric": metric, "results": [], "message": f"No hay datos para {date}"})
 
     results = [
         {
@@ -229,30 +193,15 @@ def pages_top():
         for i, row in enumerate(rows)
     ]
 
-    return jsonify({
-        "date": date,
-        "metric": metric,
-        "limit": limit,
-        "count": len(results),
-        "results": results,
-    })
+    return jsonify({"date": date, "metric": metric, "limit": limit, "count": len(results), "results": results})
 
 
 # ──────────────────────────────────────────────
 # ENDPOINT 2 — Resumen de sesiones
-# GET /sessions/summary?country={country}&device={device}&date={date}
 # ──────────────────────────────────────────────
 
 @app.route("/sessions/summary", methods=["GET"])
 def sessions_summary():
-    """
-    Resumen de sesiones filtrado por país, dispositivo y fecha.
-
-    Params:
-      date    : YYYY-MM-DD  (requerido)
-      country : código ISO  (opcional, ej: CO, MX, US)
-      device  : mobile | desktop | tablet  (opcional)
-    """
     date    = request.args.get("date")
     country = request.args.get("country")
     device  = request.args.get("device")
@@ -264,14 +213,12 @@ def sessions_summary():
     if device and device not in ("mobile", "desktop", "tablet"):
         return error_response("'device' debe ser mobile, desktop o tablet")
 
-    # Construir query dinámicamente según filtros
     filters = ["date = :date"]
     params  = {"date": date}
 
     if country:
         filters.append("country = :country")
         params["country"] = country.upper()
-
     if device:
         filters.append("device_type = :device")
         params["device"] = device
@@ -280,12 +227,11 @@ def sessions_summary():
 
     query = text(f"""
         SELECT
-            country,
-            device_type,
-            SUM(total_sessions)         AS total_sessions,
-            AVG(avg_session_duration)   AS avg_duration,
-            SUM(total_pageviews)        AS total_pageviews,
-            SUM(unique_users)           AS unique_users
+            country, device_type,
+            SUM(total_sessions)       AS total_sessions,
+            AVG(avg_session_duration) AS avg_duration,
+            SUM(total_pageviews)      AS total_pageviews,
+            SUM(unique_users)         AS unique_users
         FROM session_summary
         WHERE {where}
         GROUP BY country, device_type
@@ -296,12 +242,7 @@ def sessions_summary():
         rows = conn.execute(query, params).fetchall()
 
     if not rows:
-        return jsonify({
-            "date": date,
-            "filters": {"country": country, "device": device},
-            "results": [],
-            "message": f"No hay datos para los filtros aplicados"
-        })
+        return jsonify({"date": date, "filters": {"country": country, "device": device}, "results": [], "message": "No hay datos para los filtros aplicados"})
 
     results = [
         {
@@ -316,35 +257,21 @@ def sessions_summary():
         for row in rows
     ]
 
-    # Totales agregados
     totals = {
         "total_sessions": sum(r["total_sessions"] for r in results),
         "total_pageviews": sum(r["total_pageviews"] for r in results),
         "unique_users": sum(r["unique_users"] for r in results),
     }
 
-    return jsonify({
-        "date": date,
-        "filters": {"country": country, "device": device},
-        "count": len(results),
-        "totals": totals,
-        "results": results,
-    })
+    return jsonify({"date": date, "filters": {"country": country, "device": device}, "count": len(results), "totals": totals, "results": results})
 
 
 # ──────────────────────────────────────────────
 # ENDPOINT 3 — Anomalías
-# GET /anomalies?date={date}
 # ──────────────────────────────────────────────
 
 @app.route("/anomalies", methods=["GET"])
 def anomalies():
-    """
-    Lista de sesiones anómalas detectadas en una fecha.
-
-    Params:
-      date : YYYY-MM-DD  (requerido)
-    """
     date = request.args.get("date")
 
     if not date:
@@ -353,13 +280,7 @@ def anomalies():
         return error_response("Formato de 'date' inválido. Use YYYY-MM-DD")
 
     query = text("""
-        SELECT
-            session_id,
-            user_id,
-            anomaly_type,
-            z_score,
-            metric_value,
-            description
+        SELECT session_id, user_id, anomaly_type, z_score, metric_value, description
         FROM anomalies
         WHERE date = :date
         ORDER BY z_score DESC
@@ -381,11 +302,7 @@ def anomalies():
         for row in rows
     ]
 
-    return jsonify({
-        "date": date,
-        "total_anomalies": len(results),
-        "anomalies": results,
-    })
+    return jsonify({"date": date, "total_anomalies": len(results), "anomalies": results})
 
 
 # ──────────────────────────────────────────────
@@ -403,8 +320,10 @@ def health():
 
 
 # ──────────────────────────────────────────────
-# MAIN
+# HANDLER ZAPPA/LAMBDA + MAIN
 # ──────────────────────────────────────────────
+
+app.wsgi_app = ProxyFix(app.wsgi_app)
 
 if __name__ == "__main__":
     if USE_SQLITE:
