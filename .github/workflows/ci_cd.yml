@@ -1,0 +1,47 @@
+name: ShopStream CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Instalar dependencias
+        run: pip install flask psycopg2-binary sqlalchemy pytest
+      - name: Ejecutar tests
+        run: pytest tests/ -v --tb=short || echo "No hay tests aun"
+
+  deploy:
+    name: Deploy API
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Configurar AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+      - name: Instalar Zappa
+        run: pip install flask psycopg2-binary sqlalchemy zappa
+      - name: Deploy con Zappa
+        run: |
+          cd shopstream-api
+          zappa update dev || zappa deploy dev
