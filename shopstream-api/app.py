@@ -21,6 +21,9 @@ from flask import Flask, jsonify, request
 from sqlalchemy import create_engine, text
 
 app = Flask(__name__)
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "ok", "service": "ShopStream API"})
 
 # ──────────────────────────────────────────────
 # CONFIGURACIÓN DE BASE DE DATOS

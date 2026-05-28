@@ -2,20 +2,19 @@
     "dev": {
         "app_function": "app.app",
         "aws_region": "us-east-1",
-        "profile_name": "default",
         "project_name": "shopstream-api",
-        "runtime": "python3.12",
+        "runtime": "python3.11",
         "s3_bucket": "shopstream-datalake-7489",
         "memory_size": 512,
         "timeout_seconds": 30,
+        "manage_roles": false,
+        "role_arn": "arn:aws:iam::305382457489:role/LabRole",
         "environment_variables": {
-            "USE_SQLITE": "false",
             "DB_HOST": "shopstream-dw.czlint0ubsu5.us-east-1.rds.amazonaws.com",
             "DB_NAME": "shopstream",
             "DB_USER": "shopstream",
             "DB_PASS": "ShopStream2026!",
-            "DB_PORT": "5432"
-        },
-        "cors": true
+            "USE_SQLITE": "false"
+        }
     }
 }
